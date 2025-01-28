@@ -3,8 +3,15 @@ project(falcon)
 
 set(CMAKE_CXX_STANDARD 20)
 
-add_library(falcon STATIC src/library.cpp)
+if(WIN32)
+    set(FALCON_BACKEND src/falcon_windows.cpp)
+else ()
+    set(FALCON_BACKEND src/falcon_posix.cpp)
+endif (WIN32)
+
+add_library(falcon STATIC inc/falcon.h src/falcon_common.cpp ${FALCON_BACKEND})
 target_include_directories(falcon PUBLIC inc)
+target_link_libraries(falcon PUBLIC spdlog::spdlog_header_only fmt::fmt-header-only)
 
 add_subdirectory(externals)
 add_subdirectory(samples)
