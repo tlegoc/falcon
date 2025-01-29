@@ -1,12 +1,13 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <span>
 
 void hello();
 
 #ifdef WIN32
-    using SocketType = SOCKET;
+    using SocketType = unsigned int;
 #else
     using SocketType = int;
 #endif
