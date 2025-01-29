@@ -2,7 +2,7 @@
     #define _WIN32_WINNT 0x0501  /* Windows XP. */
 #endif
 #include <winsock2.h>
-#include <Ws2tcpip.h>
+#include <ws2tcpip.h>
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -23,7 +23,7 @@ struct WinSockInitializer
     {
         WSACleanup();
     }
-}
+};
 
 std::string IpToString(const sockaddr* sa)
 {
@@ -56,7 +56,6 @@ sockaddr StringToIp(const std::string& ip, uint16_t port)
     int error = inet_pton(AF_INET, ip.c_str(), &result);
     if (error == 1) {
         result.sa_family = AF_INET;
-        result.sa_len = sizeof(sockaddr_in);
         reinterpret_cast<sockaddr_in*>(&result)->sin_port = htons(port);
         return result;
     }
@@ -65,7 +64,6 @@ sockaddr StringToIp(const std::string& ip, uint16_t port)
     error = inet_pton(AF_INET6, ip.c_str(), &result);
     if (error == 1) {
         result.sa_family = AF_INET6;
-        result.sa_len = sizeof(sockaddr_in6);
         reinterpret_cast<sockaddr_in6*>(&result)->sin6_port = htons(port);
         return result;
     }
