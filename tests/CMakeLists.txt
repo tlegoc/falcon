@@ -1,7 +1,7 @@
 FetchContent_Declare(
         Catch2
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-        GIT_TAG        v3.8.0
+        GIT_TAG        devel
 )
 
 FetchContent_MakeAvailable(Catch2)
@@ -12,5 +12,5 @@ include(CTest)
 include(Catch)
 
 add_executable(tests test.cpp)
-target_link_libraries(tests PRIVATE Catch2::Catch2WithMain)
+target_link_libraries(tests PRIVATE Catch2::Catch2WithMain falcon)
 catch_discover_tests(tests)
