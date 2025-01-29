@@ -38,7 +38,9 @@ sockaddr StringToIp(const std::string& ip, uint16_t port)
     int error = inet_pton(AF_INET, ip.c_str(), &result);
     if (error == 1) {
         result.sa_family = AF_INET;
+#ifndef __linux__
         result.sa_len = sizeof(sockaddr_in);
+#endif
         reinterpret_cast<sockaddr_in*>(&result)->sin_port = htons(port);
         return result;
     }
@@ -47,7 +49,9 @@ sockaddr StringToIp(const std::string& ip, uint16_t port)
     error = inet_pton(AF_INET6, ip.c_str(), &result);
     if (error == 1) {
         result.sa_family = AF_INET6;
+#ifndef __linux__
         result.sa_len = sizeof(sockaddr_in6);
+#endif
         reinterpret_cast<sockaddr_in6*>(&result)->sin6_port = htons(port);
         return result;
     }
