@@ -3,6 +3,7 @@
 //
 
 #include <uuid.h>
+#include <ostream>
 
 #ifdef _WIN32
 #include <objbase.h>
