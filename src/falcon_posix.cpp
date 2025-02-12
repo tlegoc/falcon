@@ -12,7 +12,7 @@ std::string IpToString(const sockaddr* sa)
     switch(sa->sa_family)
     {
     case AF_INET: {
-        char ip[INET_ADDRSTRLEN + 6];
+        char ip[INET_ADDRSTRLEN];
         const char* ret = inet_ntop(AF_INET,
             &reinterpret_cast<const sockaddr_in*>(sa)->sin_addr,
             ip,
@@ -20,7 +20,7 @@ std::string IpToString(const sockaddr* sa)
         return fmt::format("{}:{}", ret, ntohs(reinterpret_cast<const sockaddr_in*>(sa)->sin_port));
     }
     case AF_INET6: {
-        char ip[INET6_ADDRSTRLEN + 8];
+        char ip[INET6_ADDRSTRLEN];
         const char* ret = inet_ntop(AF_INET6,
             &reinterpret_cast<const sockaddr_in6*>(sa)->sin6_addr,
             ip+ 1,
@@ -93,13 +93,20 @@ std::unique_ptr<Falcon> Falcon::Connect(const std::string& serverIp, uint16_t po
     falcon->m_socket = socket(local_endpoint.sa_family,
         SOCK_DGRAM,
         IPPROTO_UDP);
-    if (int error = bind(falcon->m_socket, &local_endpoint, sizeof(local_endpoint)); error != 0)
-    {
-        close(falcon->m_socket);
-        return nullptr;
-    }
+//    if (int error = bind(falcon->m_socket, &local_endpoint, sizeof(local_endpoint)); error != 0)
+//    {
+//        close(falcon->m_socket);
+//        return nullptr;
+//    }
 
     return falcon;
+}
+
+int Falcon::SetBlocking(bool shouldBlock)
+{
+    int block = shouldBlock ? 0 : 1;
+    int error = ioctl(m_socket, FIONBIO, &block);
+    return error;
 }
 
 int Falcon::SendToInternal(const std::string &to, uint16_t port, std::span<const char> message)

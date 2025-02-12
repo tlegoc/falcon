@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include <falcon.h>
+#include <protocol.h>
 
 #include "spdlog/spdlog.h"
 
@@ -9,6 +10,7 @@ int main()
     spdlog::set_level(spdlog::level::debug);
     spdlog::debug("Hello World!");
 
+    /*
     auto falcon = Falcon::Listen("127.0.0.1", 5555);
     std::string from_ip;
     from_ip.resize(255);
@@ -24,4 +26,12 @@ int main()
     }
     falcon->SendTo(ip, port, std::span {buffer.data(), static_cast<unsigned long>(recv_size)});
     return EXIT_SUCCESS;
+     */
+
+    FalconServer server;
+    server.Listen(5555);
+
+    while (true) {
+        server.Tick();
+    }
 }
