@@ -17,7 +17,7 @@ add_library(falcon STATIC inc/falcon.h
         src/falcon_stream.cpp
         ${FALCON_BACKEND})
 target_include_directories(falcon PUBLIC inc)
-target_link_libraries(falcon PUBLIC spdlog::spdlog_header_only fmt::fmt-header-only)
+target_link_libraries(falcon PUBLIC spdlog::spdlog_header_only fmt::fmt-header-only uuid::uuid)
 
 add_subdirectory(externals)
 add_subdirectory(samples)
