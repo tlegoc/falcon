@@ -6,6 +6,7 @@
 
 #include <array>
 #include <string>
+#include <cstdint>
 
 using uuid128_t = std::array<uint8_t, 16>;
 
