@@ -45,28 +45,64 @@ void FalconServer::Tick() {
     PacketHeader packetHeader{};
     reader.ReadHeader(packetHeader);
 
-//    spdlog::info("Packet received: {}, size {}", packetHeader.type, packetHeader.size);
+    std::string fromIp;
+    uint16_t fromPort;
+    Falcon::SplitIpString(from, fromIp, fromPort);
+
+    // spdlog::info("Packet received from {}:{}: {}, size {}", fromIp, fromPort, packetHeader.type, packetHeader.size);
 
     switch (packetHeader.type) {
         default:
-            spdlog::info("Packet received: {}, size {}", packetHeader.type, packetHeader.size);
+            spdlog::info("Unknown packet type: {}", packetHeader.type);
             break;
         case PacketType::CONNECT: {
-            ConnectHeader connectPacket{};
-            reader.ReadHeader(connectPacket);
-
-            uuid128_t uuid = UuidGenerator::Generate();
-            uuid128_t reconnectedToken = UuidGenerator::Generate();
-
-            PacketHeader responseHeader{PacketType::CONNECT, sizeof(PacketHeader) + sizeof(ConnectHeader)};
-            ConnectAckHeader responsePacket{uuid, reconnectedToken};
-            PacketBuilder builder;
-            builder.AddHeader(responseHeader);
-            builder.AddHeader(responsePacket);
-
-            mFalcon->SendTo(from, builder.GetData());
+            HandleConnectPacket(fromIp, fromPort, reader);
             break;
         }
+        case PacketType::PING: {
+            HandlePingPacket(fromIp, fromPort, reader);
             break;
+        }
     }
+
+    // Check if any client was not seen since a long time
+}
+
+void FalconServer::HandleConnectPacket(const std::string &ip, const uint16_t &port, PacketReader &reader) {
+    ConnectHeader connectPacket{};
+    reader.ReadHeader(connectPacket);
+
+    if (connectPacket.version != PROTOCOL_VERSION) {
+        spdlog::error("Client joined with invalid protocol version: {}", connectPacket.version);
+        return;
+    }
+
+    uuid128_t uuid = UuidGenerator::Generate();
+    uuid128_t reconnectedToken = UuidGenerator::Generate();
+
+    ConnectAckHeader responsePacket{uuid, reconnectedToken};
+    PacketBuilder builder(PacketType::CONNECT_ACK);
+    builder.AddStruct(responsePacket);
+
+    mFalcon->SendTo(ip, port, builder.GetData());
+
+    if (mClientConnectedHandler) mClientConnectedHandler(uuid);
+}
+
+void FalconServer::HandlePingPacket(const std::string &ip, const uint16_t &port, PacketReader &reader) {
+    PingHeader pingPacket{};
+    reader.ReadHeader(pingPacket);
+
+    // Update the player structure, etc
+    // TODO
+
+    // spdlog::info("Ping packet received (uuid: {})", ToString(pingPacket.uuid));
+
+    // Send back a ping
+    pingPacket.time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+
+    PacketBuilder builder(PacketType::PING);
+    builder.AddStruct(pingPacket);
+
+    mFalcon->SendTo(ip, port, builder.GetData());
 }

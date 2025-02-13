@@ -10,11 +10,25 @@
 #include <functional>
 #include <falcon.h>
 #include <array>
+#include <chrono>
+#include <unordered_set>
+#include <unordered_map>
 
 #include <uuid.h>
 
 #define PROTOCOL_VERSION 1
 #define PROTOCOL_TIMEOUT_SECONDS 5
+#define PROTOCOL_DISCONNECT_TIMEOUT 5
+
+#define PROTOCOL_TIMEOUT_HELPER(socket, from, buffer, timeout) do { \
+    std::chrono::time_point<std::chrono::high_resolution_clock> now = std::chrono::high_resolution_clock::now(); \
+    timeout = false; \
+    while (socket->ReceiveFrom(from, buffer) <= 0) { \
+    if (std::chrono::high_resolution_clock::now() - now > std::chrono::seconds(PROTOCOL_TIMEOUT_SECONDS)) { \
+         timeout = true;                                            \
+         break;                                                                \
+    } \
+    } } while(0)
 
 enum PacketType {
     CONNECT = 0x00,
@@ -27,6 +41,10 @@ enum PacketType {
     PING = 0x06
 };
 
+enum DataFlag {
+    FRAGMENTED = 0x00
+};
+
 struct PacketHeader {
     uint8_t type;
     uint64_t size;
@@ -37,6 +55,12 @@ struct ConnectHeader {
 };
 
 struct ConnectAckHeader {
+    uuid128_t uuid;
+    uuid128_t reconnectToken;
+};
+
+struct ReconnectHeader
+{
     uuid128_t uuid;
     uuid128_t reconnectToken;
 };
@@ -78,8 +102,12 @@ struct DataAckHeader {
 
 class PacketBuilder {
 public:
+    PacketBuilder(PacketType type) {
+        mType = type;
+    }
+
     template<typename Header>
-    void AddHeader(const Header &header) {
+    void AddStruct(const Header &header) {
         AddData(std::span(reinterpret_cast<const char *>(&header), sizeof(Header)));
     }
 
@@ -87,7 +115,10 @@ public:
         mBuffer.insert(mBuffer.end(), data.begin(), data.end());
     }
 
-    [[nodiscard]] std::span<const char> GetData() const {
+    [[nodiscard]] std::span<const char> GetData() {
+        PacketHeader header{mType, mBuffer.size() + sizeof(PacketHeader)};
+        auto data = std::span(reinterpret_cast<const char *>(&header), sizeof(PacketHeader));
+        mBuffer.insert(mBuffer.begin(), data.begin(), data.end());
         return mBuffer;
     }
 
@@ -97,6 +128,7 @@ public:
 
 private:
     std::vector<char> mBuffer;
+    uint8_t mType;
 };
 
 class PacketReader {
@@ -126,13 +158,39 @@ private:
     std::vector<char> mBuffer;
 };
 
+#define MTU 1200
+
 class Stream {
 public:
+    explicit Stream(std::shared_ptr<Falcon> sock, streamid32_t id, bool reliable);
+    ~Stream() = default;
+
+    Stream(const Stream &) = delete;
+    Stream operator=(const Stream & ) = delete;
+
+    Stream(Stream &&) noexcept = delete;
+    Stream operator=(Stream &&) noexcept = delete;
+
     void SendData(std::span<const char> Data);
 
     void OnDataReceived(std::span<const char> Data);
+
+    inline bool SequenceGreaterThan(uint16_t s1, uint16_t s2) {return ( ( s1 > s2 ) && ( s1 - s2 <= 32768 ) ) ||
+                                                                      ( ( s1 < s2 ) && ( s2 - s1  > 32768 ) );}
+
+    int GetLocalSequence() const { return mLocalSequence; };
+    int GetRemoteSequence() const { return mRemoteSequence; };
+    streamid32_t GetStreamID() const { return mStreamID; };
+
+private :
+    std::shared_ptr<Falcon> mSocket;
+    bool mReliability;
+    int mLocalSequence;
+    int mRemoteSequence;
+    streamid32_t mStreamID;
 };
 
+// Server socket
 class FalconServer {
 public:
     void Listen(uint16_t port);
@@ -153,11 +211,20 @@ private:
     std::function<void(uuid128_t)> mClientConnectedHandler;
     std::function<void(uuid128_t)> mClientDisconnectedHandler;
     std::function<void(uuid128_t, bool)> mStreamCreatedHandler;
+
+//    std::unordered_set<uuid128_t> mClients;
+//    std::unordered_map<uuid128_t , uuid128_t> mReconnectTokens;
+
+    void HandleConnectPacket(const std::string &ip, const uint16_t &port, PacketReader &reader);
+    void HandlePingPacket(const std::string &ip, const uint16_t &port, PacketReader &reader);
 };
 
+// Client socket
 class FalconClient : public Falcon {
 public:
     void ConnectTo(const std::string &endpoint, uint16_t port);
+
+    void Reconnect();
 
     void OnConnection(std::function<void(bool, uuid128_t)> handler);
 
@@ -176,7 +243,14 @@ private:
     uuid128_t mUuid;
     uuid128_t mReconnectToken;
 
+    uint32_t mLastPingId;
+    std::chrono::milliseconds mPingInterval = std::chrono::milliseconds(100);
+    std::chrono::high_resolution_clock::time_point mLastSentPing;
+    std::chrono::high_resolution_clock::time_point mLastReceivedPing;
+
     std::function<void(bool, uuid128_t)> mConnectionHandler;
     std::function<void()> mDisconnectHandler;
     std::function<void(bool)> mStreamCreatedHandler;
+
+    void HandlePingPacket(const std::string &ip, const uint16_t &port, PacketReader &reader);
 };

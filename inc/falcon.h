@@ -11,6 +11,7 @@ using SocketType = unsigned int;
 using SocketType = int;
 #endif
 
+// Socket UDP
 class Falcon {
 public:
     static std::unique_ptr<Falcon> Listen(const std::string &endpoint, uint16_t port);
@@ -34,6 +35,8 @@ public:
     int ReceiveFrom(std::string &from, std::span<char, 65535> message);
 
     int SetBlocking(bool shouldBlock);
+
+    static void SplitIpString(const std::string &ip, std::string &outIp, uint16_t &outPort);
 
 private:
     int SendToInternal(const std::string &to, uint16_t port, std::span<const char> message);
