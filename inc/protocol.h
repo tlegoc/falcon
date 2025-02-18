@@ -158,7 +158,7 @@ private:
     std::vector<char> mBuffer;
 };
 
-#define MTU 1200
+#define MTU 1200 // Maximum Transmission Unit : 1200 octets
 
 class Stream {
 public:
@@ -178,15 +178,15 @@ public:
     inline bool SequenceGreaterThan(uint16_t s1, uint16_t s2) {return ( ( s1 > s2 ) && ( s1 - s2 <= 32768 ) ) ||
                                                                       ( ( s1 < s2 ) && ( s2 - s1  > 32768 ) );}
 
-    int GetLocalSequence() const { return mLocalSequence; };
+    uint16_t GetLocalSequence() const { return mLocalSequence; };
     int GetRemoteSequence() const { return mRemoteSequence; };
     streamid32_t GetStreamID() const { return mStreamID; };
 
 private :
     std::shared_ptr<Falcon> mSocket;
     bool mReliability;
-    int mLocalSequence;
-    int mRemoteSequence;
+    uint16_t mLocalSequence;
+    uint16_t mRemoteSequence;
     streamid32_t mStreamID;
 };
 
