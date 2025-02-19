@@ -17,28 +17,27 @@
 #include <uuid.h>
 
 #define PROTOCOL_VERSION 1
-#define PROTOCOL_TIMEOUT_SECONDS 5
-#define PROTOCOL_DISCONNECT_TIMEOUT 5
+#define PROTOCOL_TIMEOUT_MILLISECONDS 5000
+#define PROTOCOL_DISCONNECT_MILLISECONDS 1000
 
 #define PROTOCOL_TIMEOUT_HELPER(socket, from, buffer, timeout) do { \
     std::chrono::time_point<std::chrono::high_resolution_clock> now = std::chrono::high_resolution_clock::now(); \
     timeout = false; \
     while (socket->ReceiveFrom(from, buffer) <= 0) { \
-    if (std::chrono::high_resolution_clock::now() - now > std::chrono::seconds(PROTOCOL_TIMEOUT_SECONDS)) { \
+    if (std::chrono::high_resolution_clock::now() - now > std::chrono::milliseconds(PROTOCOL_TIMEOUT_MILLISECONDS)) { \
          timeout = true;                                            \
          break;                                                                \
     } \
     } } while(0)
 
-enum PacketType {
+enum PacketType : uint8_t {
     CONNECT = 0x00,
     CONNECT_ACK = 0x01,
     RECONNECT = 0x02,
     RECONNECT_ACK = CONNECT_ACK,
-    DISCONNECT = 0x03,
-    DATA = 0x04,
-    DATA_ACK = 0x05,
-    PING = 0x06
+    DATA = 0x03,
+    DATA_ACK = 0x04,
+    PING = 0x05
 };
 
 enum DataFlag {
@@ -59,8 +58,7 @@ struct ConnectAckHeader {
     uuid128_t reconnectToken;
 };
 
-struct ReconnectHeader
-{
+struct ReconnectHeader {
     uuid128_t uuid;
     uuid128_t reconnectToken;
 };
@@ -71,15 +69,7 @@ struct PingHeader {
     uint64_t time;
 };
 
-struct streamid32_t {
-    union {
-        uint32_t id;
-        struct {
-            uint32_t flag: 1;
-            uint32_t id: 3;
-        } separatedId;
-    };
-};
+using streamid32_t = uint32_t;
 
 struct DataHeader {
     uuid128_t uuid;
@@ -96,6 +86,7 @@ struct DataSplitHeader {
 
 struct DataAckHeader {
     uuid128_t uuid;
+    // streamid32_t streamId;
     uint32_t lastMsgId;
     std::array<uint8_t, 128> bitField; // should allow to validate 128 * 8 = 1024 messages
 };
@@ -158,37 +149,76 @@ private:
     std::vector<char> mBuffer;
 };
 
+class IStreamProvider
+{
+    virtual ~IStreamProvider() = 0;
+
+    void SendStreamPacket(streamid32_t id, std::span<const char> data)
+    {
+
+    }
+
+    virtual void HandleData(std::span<const char> data) = 0;
+
+    virtual void HandleDataAck(std::span<const char> data) = 0;
+};
+
 #define MTU 1200 // Maximum Transmission Unit : 1200 octets
 
 class Stream {
 public:
-    explicit Stream(std::shared_ptr<Falcon> sock, streamid32_t id, bool reliable);
+
+    struct StreamPacket {
+        uint16_t id;
+        std::span<const char> data;
+    };
+
+    explicit Stream(std::shared_ptr<Falcon> sock, uuid128_t client, bool reliable);
+
     ~Stream() = default;
 
     Stream(const Stream &) = delete;
-    Stream operator=(const Stream & ) = delete;
+    Stream operator=(const Stream &) = delete;
 
     Stream(Stream &&) noexcept = delete;
     Stream operator=(Stream &&) noexcept = delete;
 
-    void SendData(std::span<const char> Data);
+    static streamid32_t streamCounter;
 
-    void OnDataReceived(std::span<const char> Data);
+    void SendData(std::span<const char> data);
 
-    inline bool SequenceGreaterThan(uint16_t s1, uint16_t s2) {return ( ( s1 > s2 ) && ( s1 - s2 <= 32768 ) ) ||
-                                                                      ( ( s1 < s2 ) && ( s2 - s1  > 32768 ) );}
+    void OnDataReceived(std::span<const char> data);
+
+    inline bool SequenceGreaterThan(uint16_t s1, uint16_t s2) {
+        return ((s1 > s2) && (s1 - s2 <= 32768)) ||
+               ((s1 < s2) && (s2 - s1 > 32768));
+    }
 
     uint16_t GetLocalSequence() const { return mLocalSequence; };
+
     int GetRemoteSequence() const { return mRemoteSequence; };
+
     streamid32_t GetStreamID() const { return mStreamID; };
 
 private :
     std::shared_ptr<Falcon> mSocket;
-    bool mReliability;
+    uuid128_t clientID;
+    streamid32_t mStreamID;
+
     uint16_t mLocalSequence;
     uint16_t mRemoteSequence;
-    streamid32_t mStreamID;
+
+    std::array<uint8_t, 128> mAckHistory;
+    std::vector<std::span<const char>> mReceivedFragmentPacket;
+
+    // Reliability part
+    bool mReliability;
+    std::vector<StreamPacket> mAckWaitList;
 };
+
+using Duration = std::chrono::nanoseconds;
+using Clock = std::chrono::high_resolution_clock;
+using TimePoint = std::chrono::time_point<Clock, Duration>;
 
 // Server socket
 class FalconServer {
@@ -205,6 +235,12 @@ public:
 
     void Tick();
 
+    struct ClientEndpoint
+    {
+        std::string ip;
+        uint16_t port;
+    };
+
 private:
     std::unique_ptr<Falcon> mFalcon;
 
@@ -212,15 +248,21 @@ private:
     std::function<void(uuid128_t)> mClientDisconnectedHandler;
     std::function<void(uuid128_t, bool)> mStreamCreatedHandler;
 
-//    std::unordered_set<uuid128_t> mClients;
-//    std::unordered_map<uuid128_t , uuid128_t> mReconnectTokens;
+    std::unordered_map<uuid128_t, bool> mClients;
+    std::unordered_map<uuid128_t, ClientEndpoint> mClientEndpoints;
+    std::unordered_map<uuid128_t , uuid128_t> mReconnectTokens;
+    std::unordered_map<uuid128_t , TimePoint> mLastReceivedPings;
 
-    void HandleConnectPacket(const std::string &ip, const uint16_t &port, PacketReader &reader);
-    void HandlePingPacket(const std::string &ip, const uint16_t &port, PacketReader &reader);
+    void HandleConnectPacket(const std::string&ip, uint16_t port, PacketReader &reader);
+    void HandlePingPacket(const std::string&ip, uint16_t port, PacketReader &reader);
+
+    bool IsEndpointValidForClient(const std::string& ip, uint16_t port, uuid128_t client);
+
+    void CheckClientTimeout();
 };
 
 // Client socket
-class FalconClient : public Falcon {
+class FalconClient {
 public:
     void ConnectTo(const std::string &endpoint, uint16_t port);
 
@@ -238,19 +280,25 @@ public:
 
 private:
     std::unique_ptr<Falcon> mFalcon;
-    std::string mEndpoint;
-    uint16_t mPort;
+    std::string mServerIp;
+    uint16_t mServerPort;
     uuid128_t mUuid;
     uuid128_t mReconnectToken;
+    TimePoint mLastReceivedMessage;
 
-    uint32_t mLastPingId;
-    std::chrono::milliseconds mPingInterval = std::chrono::milliseconds(100);
-    std::chrono::high_resolution_clock::time_point mLastSentPing;
-    std::chrono::high_resolution_clock::time_point mLastReceivedPing;
+    uint32_t mCurrentPingId;
+    Duration mPingInterval = Duration(50);
+    TimePoint mLastReceivedPing;
+    TimePoint mLastSentPing;
+    Duration mRTT;
 
     std::function<void(bool, uuid128_t)> mConnectionHandler;
     std::function<void()> mDisconnectHandler;
     std::function<void(bool)> mStreamCreatedHandler;
 
-    void HandlePingPacket(const std::string &ip, const uint16_t &port, PacketReader &reader);
+    void HandlePingPacket(const std::string& ip, uint16_t port, PacketReader &reader);
+
+    bool IsEndpointServer(const std::string& ip, uint16_t port);
+
+    void SendPingToServer();
 };

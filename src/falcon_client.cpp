@@ -11,16 +11,15 @@
 
 void FalconClient::ConnectTo(const std::string &endpoint, uint16_t port) {
     mFalcon = Falcon::Connect(endpoint, port);
-    if (!mFalcon)
-    {
+    if (!mFalcon) {
         spdlog::error("Failed to connect to server");
         if (mConnectionHandler) mConnectionHandler(false, {});
         return;
     }
 
     mFalcon->SetBlocking(false);
-    mEndpoint = endpoint;
-    mPort = port;
+    mServerIp = endpoint;
+    mServerPort = port;
 
     ConnectHeader connectHeader{};
     connectHeader.version = PROTOCOL_VERSION;
@@ -28,20 +27,19 @@ void FalconClient::ConnectTo(const std::string &endpoint, uint16_t port) {
     PacketBuilder builder(PacketType::CONNECT);
     builder.AddStruct(connectHeader);
 
-    mFalcon->SendTo(mEndpoint, mPort, builder.GetData());
+    mFalcon->SendTo(mServerIp, mServerPort, builder.GetData());
 
     std::array<char, 65535> buffer{};
     std::string from;
     bool timeout;
     PROTOCOL_TIMEOUT_HELPER(mFalcon, from, buffer, timeout);
 
-    if (timeout)
-    {
+    if (timeout) {
         spdlog::error("Connection timeout");
 
         mFalcon = nullptr;
-        mEndpoint = "";
-        mPort = 0;
+        mServerIp = "";
+        mServerPort = 0;
 
         if (mConnectionHandler) mConnectionHandler(false, {});
         return;
@@ -62,8 +60,8 @@ void FalconClient::ConnectTo(const std::string &endpoint, uint16_t port) {
         spdlog::error("Expected CONNECT_ACK, got {}", receivedHeader.type);
 
         mFalcon = nullptr;
-        mEndpoint = "";
-        mPort = 0;
+        mServerIp = "";
+        mServerPort = 0;
 
         if (mConnectionHandler) mConnectionHandler(false, {});
         return;
@@ -77,8 +75,9 @@ void FalconClient::ConnectTo(const std::string &endpoint, uint16_t port) {
 
     if (mConnectionHandler) mConnectionHandler(true, mUuid);
 
-    mLastSentPing = std::chrono::high_resolution_clock::now();
-    mLastReceivedPing = std::chrono::high_resolution_clock::now();
+    mLastSentPing = Clock::now();
+    mLastReceivedPing = Clock::now();
+    mLastReceivedMessage = Clock::now();
 }
 
 void FalconClient::OnConnection(std::function<void(bool, uuid128_t)> handler) {
@@ -102,66 +101,104 @@ void FalconClient::OnStreamCreated(std::function<void(bool)> handler) {
 void FalconClient::Tick() {
     if (!mFalcon) return;
 
-    // Send ping to server
-    if (std::chrono::high_resolution_clock::now() - mLastSentPing > mPingInterval) {
-        PacketBuilder builder(PacketType::PING);
-
-        PingHeader pingHeader{};
-        pingHeader.uuid = mUuid;
-        pingHeader.id = mLastPingId++;
-        pingHeader.time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-
-        builder.AddStruct(pingHeader);
-
-        mFalcon->SendTo(mEndpoint, mPort, builder.GetData());
-
-        mLastSentPing = std::chrono::high_resolution_clock::now();
-    }
-
     // Listen to messages
     std::array<char, 65535> buffer{};
     std::string from;
-    if (mFalcon->ReceiveFrom(from, buffer) <= 0) return;
+    if (mFalcon->ReceiveFrom(from, buffer) > 0) {
+        std::string fromIp;
+        uint16_t fromPort;
+        Falcon::SplitIpString(from, fromIp, fromPort);
 
-    PacketReader reader(buffer);
-
-    PacketHeader packetHeader{};
-    reader.ReadHeader(packetHeader);
-
-    std::string fromIp;
-    uint16_t fromPort;
-    Falcon::SplitIpString(from, fromIp, fromPort);
-
-    // spdlog::info("Packet received from {}:{}: {}, size {}", fromIp, fromPort, packetHeader.type, packetHeader.size);
-
-    switch (packetHeader.type) {
-        default:
-            spdlog::info("Unknown packet type: {}", packetHeader.type);
-            break;
-        case PacketType::CONNECT:
-        case PacketType::CONNECT_ACK:
-            spdlog::info("Unsupported packet type: {}", packetHeader.type);
-            break;
-        case PacketType::PING: {
-            HandlePingPacket(fromIp, fromPort, reader);
-            break;
+        if (fromIp != mServerIp || fromPort != mServerPort) {
+            spdlog::error("Received message from unknown source: {}:{}", fromIp, fromPort);
+            return;
         }
+
+        PacketReader reader(buffer);
+
+        PacketHeader packetHeader{};
+        reader.ReadHeader(packetHeader);
+
+        // spdlog::info("Packet received from {}:{}: {}, size {}", fromIp, fromPort, packetHeader.type, packetHeader.size);
+
+        switch (packetHeader.type) {
+            default:
+                spdlog::info("Unknown packet type: {}", packetHeader.type);
+                break;
+            case PacketType::CONNECT:
+            case PacketType::CONNECT_ACK:
+                spdlog::info("Unsupported packet type: {}", packetHeader.type);
+                break;
+            case PacketType::PING: {
+                HandlePingPacket(reader);
+                break;
+                case PacketType::DATA:
+
+            }
+        }
+
+        mLastReceivedMessage = Clock::now();
     }
 
-    if (mLastSentPing - mLastReceivedPing > std::chrono::seconds(PROTOCOL_DISCONNECT_TIMEOUT)) {
-        mFalcon = nullptr;
+    // Send ping if necessary
+    if (std::chrono::high_resolution_clock::now() - mLastSentPing > mPingInterval) {
+        SendPingToServer();
+    }
 
+    // DEBUG Show rtt every second
+#ifdef _DEBUG
+    static TimePoint lastPrintedRTT = Clock::now();
+    if (Clock::now() - lastPrintedRTT > std::chrono::seconds(1)) {
+        spdlog::debug("RTT: {}ms", std::chrono::duration_cast<std::chrono::milliseconds>(mRTT).count());
+        lastPrintedRTT = Clock::now();
+    }
+#endif
+
+    if (Clock::now() - mLastReceivedMessage > std::chrono::milliseconds(PROTOCOL_DISCONNECT_MILLISECONDS)) {
+        spdlog::error("Connection timeout");
         if (mDisconnectHandler) mDisconnectHandler();
+        mFalcon = nullptr;
     }
 }
 
-void FalconClient::HandlePingPacket(const std::string &ip, const uint16_t &port, PacketReader &reader) {
+void FalconClient::HandlePingPacket(const std::string &ip, uint16_t port, PacketReader &reader) {
     PingHeader pingPacket{};
     reader.ReadHeader(pingPacket);
 
-    mLastReceivedPing = std::chrono::high_resolution_clock::time_point(std::chrono::high_resolution_clock::duration(pingPacket.time));
+    if (pingPacket.uuid != mUuid) {
+        spdlog::error("Received ping from unknown source");
+        return;
+    }
+
+    if (pingPacket.id >= mCurrentPingId) {
+        spdlog::error("Received ping with invalid id");
+        return;
+    }
+
+    mLastReceivedPing = Clock::now();
+
+    mRTT = mLastReceivedPing - TimePoint(Duration(pingPacket.time));
 }
 
 void FalconClient::Reconnect() {
 
+}
+
+void FalconClient::SendPingToServer() {
+    mLastSentPing = Clock::now();
+
+    PacketBuilder builder(PacketType::PING);
+
+    PingHeader pingHeader{};
+    pingHeader.uuid = mUuid;
+    pingHeader.id = mCurrentPingId++;
+    pingHeader.time = mLastSentPing.time_since_epoch().count();
+
+    builder.AddStruct(pingHeader);
+
+    mFalcon->SendTo(mServerIp, mServerPort, builder.GetData());
+}
+
+bool FalconClient::IsEndpointServer(const std::string &ip, uint16_t port) {
+    return ip == mServerIp && port == mServerPort;
 }

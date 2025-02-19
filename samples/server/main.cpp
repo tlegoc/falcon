@@ -32,6 +32,9 @@ int main()
     server.OnClientConnected([](const uuid128_t& id) {
         spdlog::info("Client connected with id: {}", ToString(id));
     });
+    server.OnClientDisconnected([](const uuid128_t& id) {
+        spdlog::info("Client disconnected with id: {}", ToString(id));
+    });
     server.Listen(5555);
 
     while (true) {
