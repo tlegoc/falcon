@@ -40,8 +40,9 @@ enum PacketType : uint8_t {
     PING = 0x05
 };
 
-enum DataFlag {
-    FRAGMENTED = 0x00
+enum DataFlag : uint8_t {
+    NONE = 0,
+    FRAGMENTED = 1 << 0
 };
 
 struct PacketHeader {
@@ -73,7 +74,7 @@ using streamid32_t = uint32_t;
 
 struct DataHeader {
     uuid128_t uuid;
-    streamid32_t streamId;
+    uuid128_t streamId;
     uint32_t msgId;
     uint64_t size;
     uint8_t flags;
@@ -86,7 +87,7 @@ struct DataSplitHeader {
 
 struct DataAckHeader {
     uuid128_t uuid;
-    // streamid32_t streamId;
+    uuid128_t streamId;
     uint32_t lastMsgId;
     std::array<uint8_t, 128> bitField; // should allow to validate 128 * 8 = 1024 messages
 };
@@ -95,6 +96,7 @@ class PacketBuilder {
 public:
     PacketBuilder(PacketType type) {
         mType = type;
+        AddStruct(PacketHeader{});
     }
 
     template<typename Header>
@@ -107,16 +109,18 @@ public:
     }
 
     // Will copy to buffer starting from data to specified end
-    void AddData(const char* data, const uint64_t start, const uint64_t end) {
+    void AddData(const char *data, const uint64_t end) {
         size_t bufferSize = mBuffer.size();
         mBuffer.resize(bufferSize + end);
-        std::memcpy(&mBuffer[bufferSize], &data + start, *data + end);
+        std::memcpy(&mBuffer[bufferSize], data, end);
     }
 
     [[nodiscard]] std::span<const char> GetData() {
-        PacketHeader header{mType, mBuffer.size() + sizeof(PacketHeader)};
-        auto data = std::span(reinterpret_cast<const char *>(&header), sizeof(PacketHeader));
-        mBuffer.insert(mBuffer.begin(), data.begin(), data.end());
+        PacketHeader header{mType, mBuffer.size()};
+
+        // Updates the packet header contained at the beginning of mbuffer
+        std::memcpy(mBuffer.data(), &header, sizeof(PacketHeader));
+
         return mBuffer;
     }
 
@@ -144,7 +148,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] std::span<const char> GetData() const {
+    [[nodiscard]] std::span<const char> GetRemainingData() const {
         return mBuffer;
     }
 
@@ -156,12 +160,11 @@ private:
     std::vector<char> mBuffer;
 };
 
-class IStreamProvider
-{
-    public:
-        virtual ~IStreamProvider() = 0;
+class IStreamProvider {
+public:
+    virtual ~IStreamProvider() = default;
 
-        virtual void SendStreamPacket(uuid128_t clientId, std::span<const char> data) = 0;
+    virtual void SendStreamPacket(uuid128_t clientId, std::span<const char> data) = 0;
 };
 
 #define MTU 1200 // Maximum Transmission Unit : 1200 octets
@@ -170,47 +173,61 @@ class Stream {
 public:
 
     struct StreamPacket {
-        uint16_t id;
+        uint32_t id;
         std::span<const char> data;
     };
 
-    explicit Stream(std::shared_ptr<IStreamProvider> streamProvider, uuid128_t client, bool reliable);
+    struct FragmentedPacket
+    {
+        uint32_t total;
+        std::vector<uint32_t> ids;
+        std::vector<std::span<const char>> data;
+    };
+
+    explicit Stream(IStreamProvider *streamProvider, uuid128_t client, bool reliable);
 
     ~Stream() = default;
 
     Stream(const Stream &) = delete;
+
     Stream operator=(const Stream &) = delete;
 
     Stream(Stream &&) noexcept = delete;
-    Stream operator=(Stream &&) noexcept = delete;
 
-    static streamid32_t streamCounter;
+    Stream operator=(Stream &&) noexcept = delete;
 
     void SendData(std::span<const char> data);
 
-    void OnDataReceived(std::span<const char> data);
+    void OnDataReceived(std::function<void(std::span<const char>)> function);
 
-    inline bool SequenceGreaterThan(uint16_t s1, uint16_t s2) {
+    void SendMissingPackets(const std::vector<uint32_t>& ackedList);
+
+    void HandlePartialPacket(uint32_t packetId, DataSplitHeader header, std::span<const char> packetData);
+
+    void HandleDataReceived(std::span<const char> data);
+
+    static inline bool SequenceGreaterThan(uint16_t s1, uint16_t s2) {
         return ((s1 > s2) && (s1 - s2 <= 32768)) ||
                ((s1 < s2) && (s2 - s1 > 32768));
     }
 
-    uint16_t GetLocalSequence() const { return mLocalSequence; };
+    uint32_t GetLocalSequence() const { return mLocalSequence; };
 
-    uint16_t GetRemoteSequence() const { return mRemoteSequence; };
+    uint32_t GetRemoteSequence() const { return mRemoteSequence; };
 
-    streamid32_t GetStreamID() const { return mStreamID; };
+    uuid128_t GetStreamID() const { return mStreamID; };
 
 private :
-    std::shared_ptr<IStreamProvider> mStreamProvider;
+    IStreamProvider *mStreamProvider;
     uuid128_t mClientID;
-    streamid32_t mStreamID;
+    uuid128_t mStreamID;
 
-    uint16_t mLocalSequence;
-    uint16_t mRemoteSequence;
+    uint32_t mLocalSequence;
+    uint32_t mRemoteSequence;
 
     std::array<uint8_t, 128> mAckHistory;
-    std::vector<std::span<const char>> mReceivedFragmentPacket;
+    std::unordered_map<uint32_t /*packet id*/, FragmentedPacket> mReceivedFragmentPacket;
+    std::function<void(std::span<const char>)> mDataReceivedHandler;
 
     // Reliability part
     bool mReliability;
@@ -222,7 +239,7 @@ using Clock = std::chrono::high_resolution_clock;
 using TimePoint = std::chrono::time_point<Clock, Duration>;
 
 // Server socket
-class FalconServer {
+class FalconServer : public IStreamProvider {
 public:
     void Listen(uint16_t port);
 
@@ -230,14 +247,15 @@ public:
 
     void OnClientDisconnected(std::function<void(uuid128_t)> handler);
 
-    std::unique_ptr<Stream> CreateStream(uuid128_t client, bool reliable);
+    std::shared_ptr<Stream> CreateStream(uuid128_t client, bool reliable);
 
-    void OnStreamCreated(std::function<void(uuid128_t, bool)> handler);
+    void OnStreamCreated(std::function<void(std::shared_ptr<Stream>)> handler);
+
+    void SendStreamPacket(uuid128_t clientId, std::span<const char> data) override;
 
     void Tick();
 
-    struct ClientEndpoint
-    {
+    struct ClientEndpoint {
         std::string ip;
         uint16_t port;
     };
@@ -247,35 +265,39 @@ private:
 
     std::function<void(uuid128_t)> mClientConnectedHandler;
     std::function<void(uuid128_t)> mClientDisconnectedHandler;
-    std::function<void(uuid128_t, bool)> mStreamCreatedHandler;
+    std::function<void(std::shared_ptr<Stream>)> mStreamCreatedHandler;
 
     std::unordered_map<uuid128_t, bool> mClients;
     std::unordered_map<uuid128_t, ClientEndpoint> mClientEndpoints;
-    std::unordered_map<uuid128_t , uuid128_t> mReconnectTokens;
-    std::unordered_map<uuid128_t , TimePoint> mLastReceivedPings;
+    std::unordered_map<uuid128_t, uuid128_t> mReconnectTokens;
+    std::unordered_map<uuid128_t, TimePoint> mLastReceivedPings;
+    std::unordered_map<uuid128_t, std::unordered_map<uuid128_t, std::shared_ptr<Stream>>> mClientStreams;
 
-    void HandleConnectPacket(const std::string&ip, uint16_t port, PacketReader &reader);
-    void HandlePingPacket(const std::string&ip, uint16_t port, PacketReader &reader);
+    void HandleConnectPacket(const std::string &ip, uint16_t port, PacketReader &reader);
 
-    bool IsEndpointValidForClient(const std::string& ip, uint16_t port, uuid128_t client);
+    void HandlePingPacket(const std::string &ip, uint16_t port, PacketReader &reader);
+
+    void HandleDataPacket(const std::string &ip, uint16_t port, PacketReader &reader);
+
+    bool IsEndpointValidForClient(const std::string &ip, uint16_t port, uuid128_t client);
 
     void CheckClientTimeout();
 };
 
 // Client socket
-class FalconClient {
+class FalconClient : public IStreamProvider {
 public:
     void ConnectTo(const std::string &endpoint, uint16_t port);
-
-    void Reconnect();
 
     void OnConnection(std::function<void(bool, uuid128_t)> handler);
 
     void OnDisconnect(std::function<void()> handler);
 
-    std::unique_ptr<Stream> CreateStream(bool reliable);
+    std::shared_ptr<Stream> CreateStream(bool reliable);
 
-    void OnStreamCreated(std::function<void(bool)> handler);
+    void OnStreamCreated(std::function<void(std::shared_ptr<Stream>)> handler);
+
+    void SendStreamPacket(uuid128_t clientId, std::span<const char> data) override;
 
     void Tick();
 
@@ -293,13 +315,17 @@ private:
     TimePoint mLastSentPing;
     Duration mRTT;
 
+    std::unordered_map<uuid128_t, std::shared_ptr<Stream>> mStreams;
+
     std::function<void(bool, uuid128_t)> mConnectionHandler;
     std::function<void()> mDisconnectHandler;
-    std::function<void(bool)> mStreamCreatedHandler;
+    std::function<void(std::shared_ptr<Stream>)> mStreamCreatedHandler;
 
-    void HandlePingPacket(const std::string& ip, uint16_t port, PacketReader &reader);
+    void HandlePingPacket(const std::string &ip, uint16_t port, PacketReader &reader);
 
-    bool IsEndpointServer(const std::string& ip, uint16_t port);
+    void HandleDataPacket(const std::string &ip, uint16_t port, PacketReader &reader);
+
+    bool IsEndpointServer(const std::string &ip, uint16_t port);
 
     void SendPingToServer();
 };

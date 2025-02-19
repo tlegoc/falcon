@@ -39,8 +39,16 @@ int main() {
         spdlog::error("Disconnected from server");
         quit = true;
     });
-    client.ConnectTo("127.0.0.1", 5555);
 
+    std::shared_ptr<Stream> stream = nullptr;
+    client.OnStreamCreated([&](std::shared_ptr<Stream> s) {
+        stream = s;
+        s->OnDataReceived([](std::span<const char> data) {
+            spdlog::info(data.data());
+        });
+    });
+
+    client.ConnectTo("127.0.0.1", 5555);
     if (!connected) {
         return 1;
     }

@@ -25,11 +25,17 @@ void FalconServer::OnClientDisconnected(std::function<void(uuid128_t)> handler) 
     mClientDisconnectedHandler = std::move(handler);
 }
 
-std::unique_ptr<Stream> FalconServer::CreateStream(uuid128_t client, bool reliable) {
-    return nullptr;
+std::shared_ptr<Stream> FalconServer::CreateStream(uuid128_t client, bool reliable) {
+    auto stream = std::make_shared<Stream>(static_cast<IStreamProvider *>(this), client, reliable);
+
+    mClientStreams[client][stream->GetStreamID()] = stream;
+
+    spdlog::debug("Created stream with uuid: {} for client {}", ToString(stream->GetStreamID()), ToString(client));
+
+    return stream;
 }
 
-void FalconServer::OnStreamCreated(std::function<void(uuid128_t, bool)> handler) {
+void FalconServer::OnStreamCreated(std::function<void(std::shared_ptr<Stream>)> handler) {
     mStreamCreatedHandler = std::move(handler);
 }
 
@@ -62,6 +68,16 @@ void FalconServer::Tick() {
                 HandlePingPacket(fromIp, fromPort, reader);
                 break;
             }
+            case PacketType::DATA: {
+                HandleDataPacket(fromIp, fromPort, reader);
+                break;
+            }
+            case PacketType::DATA_ACK:
+                break;
+            case PacketType::RECONNECT:
+            case PacketType::CONNECT_ACK:
+                spdlog::info("Unsupported packet type: {}", packetHeader.type);
+                break;
         }
     }
 
@@ -87,12 +103,12 @@ void FalconServer::HandleConnectPacket(const std::string &ip, uint16_t port, Pac
 
     mFalcon->SendTo(ip, port, builder.GetData());
 
-    if (mClientConnectedHandler) mClientConnectedHandler(uuid);
-
-    mClients[uuid] = true;
-    mClientEndpoints[uuid] = { ip, port };
+    mClients[uuid] = true; // status (connected if true)
+    mClientEndpoints[uuid] = {ip, port}; // Will change on reconnect
     mReconnectTokens[reconnectedToken] = uuid;
     mLastReceivedPings[uuid] = Clock::now();
+
+    if (mClientConnectedHandler) mClientConnectedHandler(uuid);
 }
 
 void FalconServer::HandlePingPacket(const std::string &ip, uint16_t port, PacketReader &reader) {
@@ -104,7 +120,6 @@ void FalconServer::HandlePingPacket(const std::string &ip, uint16_t port, Packet
         return;
     }
 
-    // Update the player structure, etc
     mLastReceivedPings[pingPacket.uuid] = Clock::now();
 
     PacketBuilder builder(PacketType::PING);
@@ -130,3 +145,46 @@ bool FalconServer::IsEndpointValidForClient(const std::string &ip, uint16_t port
 
     return endpoint.ip == ip && endpoint.port == port;
 }
+
+void FalconServer::SendStreamPacket(uuid128_t clientId, std::span<const char> data) {
+    if (!mClients[clientId])
+    {
+        spdlog::warn("Sending data to a disconnected client {}!!", ToString(clientId));
+        return;
+    }
+
+    auto endpoint = mClientEndpoints[clientId];
+
+    mFalcon->SendTo(endpoint.ip, endpoint.port, data);
+}
+
+void FalconServer::HandleDataPacket(const std::string &ip, uint16_t port, PacketReader &reader) {
+    DataHeader dataHeader{};
+    reader.ReadHeader(dataHeader);
+
+    if (!IsEndpointValidForClient(ip, port, dataHeader.uuid)) {
+        spdlog::error("Received data packet from invalid endpoint");
+        return;
+    }
+
+    bool reliable = dataHeader.streamId[0] == 1;
+
+    std::shared_ptr<Stream> stream = nullptr;
+    if (mClientStreams[dataHeader.uuid].contains(dataHeader.streamId)) {
+        stream = mClientStreams[dataHeader.uuid][dataHeader.streamId];
+    } else {
+        stream = CreateStream(dataHeader.uuid, reliable);
+        if (mStreamCreatedHandler) mStreamCreatedHandler(stream);
+    }
+
+    auto fragmented = (dataHeader.flags & DataFlag::FRAGMENTED) == DataFlag::FRAGMENTED;
+    if (fragmented) {
+        DataSplitHeader splitHeader{};
+        reader.ReadHeader(splitHeader);
+
+        stream->HandlePartialPacket(dataHeader.msgId, splitHeader, reader.GetRemainingData());
+    } else {
+        stream->HandleDataReceived(reader.GetRemainingData());
+    }
+}
+

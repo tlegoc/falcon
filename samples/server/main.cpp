@@ -5,8 +5,7 @@
 
 #include "spdlog/spdlog.h"
 
-int main()
-{
+int main() {
     spdlog::set_level(spdlog::level::debug);
     spdlog::debug("Hello World!");
 
@@ -29,15 +28,31 @@ int main()
      */
 
     FalconServer server;
-    server.OnClientConnected([](const uuid128_t& id) {
+    std::vector<std::shared_ptr<Stream>> streams;
+
+    server.OnClientConnected([&](const uuid128_t &id) {
         spdlog::info("Client connected with id: {}", ToString(id));
+
+        streams.push_back(server.CreateStream(id, false));
     });
-    server.OnClientDisconnected([](const uuid128_t& id) {
+
+    server.OnClientDisconnected([](const uuid128_t &id) {
         spdlog::info("Client disconnected with id: {}", ToString(id));
     });
     server.Listen(5555);
 
+    auto lastDataSendTime = std::chrono::high_resolution_clock::now();
     while (true) {
         server.Tick();
+
+        if (std::chrono::high_resolution_clock::now() - lastDataSendTime > std::chrono::seconds(1)) {
+            lastDataSendTime = std::chrono::high_resolution_clock::now();
+
+            spdlog::info("Sending data to {} streams", streams.size());
+
+            for (auto &stream: streams) {
+                stream->SendData("J'envoie un message au stream " + ToString(stream->GetStreamID()));
+            }
+        }
     }
 }

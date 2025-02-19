@@ -88,13 +88,17 @@ void FalconClient::OnDisconnect(std::function<void()> handler) {
     mDisconnectHandler = std::move(handler);
 }
 
-std::unique_ptr<Stream> FalconClient::CreateStream(bool reliable) {
+std::shared_ptr<Stream> FalconClient::CreateStream(bool reliable) {
+    auto stream = std::make_shared<Stream>(static_cast<IStreamProvider *>(this), mUuid, reliable);
 
+    mStreams[stream->GetStreamID()] = stream;
 
-    return nullptr;
+    spdlog::debug("Created stream with uuid: {}", ToString(stream->GetStreamID()));
+
+    return stream;
 }
 
-void FalconClient::OnStreamCreated(std::function<void(bool)> handler) {
+void FalconClient::OnStreamCreated(std::function<void(std::shared_ptr<Stream>)> handler) {
     mStreamCreatedHandler = std::move(handler);
 }
 
@@ -109,7 +113,7 @@ void FalconClient::Tick() {
         uint16_t fromPort;
         Falcon::SplitIpString(from, fromIp, fromPort);
 
-        if (fromIp != mServerIp || fromPort != mServerPort) {
+        if (!IsEndpointServer(fromIp, fromPort)) {
             spdlog::error("Received message from unknown source: {}:{}", fromIp, fromPort);
             return;
         }
@@ -119,22 +123,23 @@ void FalconClient::Tick() {
         PacketHeader packetHeader{};
         reader.ReadHeader(packetHeader);
 
-        // spdlog::info("Packet received from {}:{}: {}, size {}", fromIp, fromPort, packetHeader.type, packetHeader.size);
-
         switch (packetHeader.type) {
             default:
                 spdlog::info("Unknown packet type: {}", packetHeader.type);
                 break;
+            case PacketType::PING: {
+                HandlePingPacket(fromIp, fromPort, reader);
+                break;
+            }
+            case PacketType::DATA: {
+                HandleDataPacket(fromIp, fromPort, reader);
+                break;
+            }
             case PacketType::CONNECT:
             case PacketType::CONNECT_ACK:
+            case PacketType::RECONNECT:
                 spdlog::info("Unsupported packet type: {}", packetHeader.type);
                 break;
-            case PacketType::PING: {
-                HandlePingPacket(reader);
-                break;
-                case PacketType::DATA:
-
-            }
         }
 
         mLastReceivedMessage = Clock::now();
@@ -154,6 +159,7 @@ void FalconClient::Tick() {
     }
 #endif
 
+    // If the last received message was too long ago, then the server disconnected
     if (Clock::now() - mLastReceivedMessage > std::chrono::milliseconds(PROTOCOL_DISCONNECT_MILLISECONDS)) {
         spdlog::error("Connection timeout");
         if (mDisconnectHandler) mDisconnectHandler();
@@ -180,10 +186,6 @@ void FalconClient::HandlePingPacket(const std::string &ip, uint16_t port, Packet
     mRTT = mLastReceivedPing - TimePoint(Duration(pingPacket.time));
 }
 
-void FalconClient::Reconnect() {
-
-}
-
 void FalconClient::SendPingToServer() {
     mLastSentPing = Clock::now();
 
@@ -201,4 +203,34 @@ void FalconClient::SendPingToServer() {
 
 bool FalconClient::IsEndpointServer(const std::string &ip, uint16_t port) {
     return ip == mServerIp && port == mServerPort;
+}
+
+void FalconClient::SendStreamPacket(uuid128_t clientId, std::span<const char> data) {
+    mFalcon->SendTo(mServerIp, mServerPort, data);
+}
+
+void FalconClient::HandleDataPacket(const std::string &ip, uint16_t port, PacketReader &reader) {
+    DataHeader dataHeader{};
+    reader.ReadHeader(dataHeader);
+
+    bool reliable = dataHeader.streamId[0] == 1; // UGLY but works and we dont have time
+
+    // Retrieve or create stream if necessary
+    std::shared_ptr<Stream> stream = nullptr;
+    if (mStreams.contains(dataHeader.streamId)) {
+        stream = mStreams[dataHeader.streamId];
+    } else {
+        stream = CreateStream(reliable);
+        if (mStreamCreatedHandler) mStreamCreatedHandler(stream);
+    }
+
+    auto fragmented = (dataHeader.flags & DataFlag::FRAGMENTED) == DataFlag::FRAGMENTED;
+    if (fragmented) {
+        DataSplitHeader splitHeader{};
+        reader.ReadHeader(splitHeader);
+
+        stream->HandlePartialPacket(dataHeader.msgId, splitHeader, reader.GetRemainingData());
+    } else {
+        stream->HandleDataReceived(reader.GetRemainingData());
+    }
 }
