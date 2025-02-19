@@ -151,16 +151,10 @@ private:
 
 class IStreamProvider
 {
-    virtual ~IStreamProvider() = 0;
+    public:
+        virtual ~IStreamProvider() = 0;
 
-    void SendStreamPacket(streamid32_t id, std::span<const char> data)
-    {
-
-    }
-
-    virtual void HandleData(std::span<const char> data) = 0;
-
-    virtual void HandleDataAck(std::span<const char> data) = 0;
+        virtual void SendStreamPacket(uuid128_t clientId, std::span<const char> data) = 0;
 };
 
 #define MTU 1200 // Maximum Transmission Unit : 1200 octets
@@ -173,7 +167,7 @@ public:
         std::span<const char> data;
     };
 
-    explicit Stream(std::shared_ptr<Falcon> sock, uuid128_t client, bool reliable);
+    explicit Stream(std::shared_ptr<IStreamProvider> streamProvider, uuid128_t client, bool reliable);
 
     ~Stream() = default;
 
@@ -196,13 +190,13 @@ public:
 
     uint16_t GetLocalSequence() const { return mLocalSequence; };
 
-    int GetRemoteSequence() const { return mRemoteSequence; };
+    uint16_t GetRemoteSequence() const { return mRemoteSequence; };
 
     streamid32_t GetStreamID() const { return mStreamID; };
 
 private :
-    std::shared_ptr<Falcon> mSocket;
-    uuid128_t clientID;
+    std::shared_ptr<IStreamProvider> mStreamProvider;
+    uuid128_t mClientID;
     streamid32_t mStreamID;
 
     uint16_t mLocalSequence;

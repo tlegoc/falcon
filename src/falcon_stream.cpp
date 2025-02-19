@@ -6,12 +6,12 @@
 
 streamid32_t Stream::streamCounter = 0;
 
-Stream::Stream(std::shared_ptr<Falcon> sock, uuid128_t client, bool reliable) :
+Stream::Stream(std::shared_ptr<IStreamProvider> streamProvider, uuid128_t client, bool reliable) :
 mLocalSequence(0),
 mRemoteSequence(0xFFFF),
 mReliability(reliable),
-mSocket(std::move(sock)),
-clientID(client),
+mStreamProvider(std::move(streamProvider)),
+mClientID(client),
 mAckHistory()
 {
     mStreamID = streamCounter++;
@@ -20,8 +20,8 @@ mAckHistory()
 void Stream::SendData(std::span<const char> data)
 {
     // Vérifier la taille de la data qu'on veut envoyer
-    size_t packetFrags = std::ceil(data.size() / MTU);
-    if(packetFrags < 1)
+    size_t packetFrags = std::ceil(static_cast<float>(data.size()) / static_cast<float>(MTU));
+    if(packetFrags > 1)
     {
         for(size_t i = 0; i < packetFrags; ++i)
         {
@@ -31,7 +31,7 @@ void Stream::SendData(std::span<const char> data)
         //Construction du packet
         PacketBuilder packet(PacketType::DATA);
         DataHeader dataHeader{
-            clientID,
+            mClientID,
             mStreamID,
             mLocalSequence,
             data.size(),
@@ -44,7 +44,7 @@ void Stream::SendData(std::span<const char> data)
         mAckWaitList.push_back(StreamPacket{mLocalSequence, packet.GetData()});
 
         //Envoyer le packet
-//        mSocket->SendTo();
+        mStreamProvider->SendStreamPacket(mClientID, packet.GetData());
         ++mLocalSequence;
     }
 
