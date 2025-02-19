@@ -25,7 +25,31 @@ void Stream::SendData(std::span<const char> data)
     {
         for(size_t i = 0; i < packetFrags; ++i)
         {
+            size_t offset = i * MTU;
+            size_t length = std::min(static_cast<size_t>(MTU), data.size() - offset);
 
+            PacketBuilder packet(PacketType::DATA);
+            DataHeader dataHeader{
+                mClientID,
+                mStreamID,
+                mLocalSequence,
+                length,
+                1
+            };
+            packet.AddStruct(dataHeader);
+
+            DataSplitHeader dataSplitHeader{
+                static_cast<uint32_t>(i),
+                static_cast<uint32_t>(packetFrags)
+            };
+            packet.AddStruct(dataSplitHeader);
+
+            //Copier le paquet depuis offset jusqu'à length
+            //packet.AddData(data[offset], length);
+            // Ajouter le packet a la liste d'attente
+            mAckWaitList.push_back(StreamPacket(mLocalSequence, packet.GetData()));
+
+            ++mLocalSequence;
         }
     } else {
         //Construction du packet
@@ -45,6 +69,7 @@ void Stream::SendData(std::span<const char> data)
 
         //Envoyer le packet
         mStreamProvider->SendStreamPacket(mClientID, packet.GetData());
+
         ++mLocalSequence;
     }
 

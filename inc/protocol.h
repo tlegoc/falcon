@@ -106,6 +106,13 @@ public:
         mBuffer.insert(mBuffer.end(), data.begin(), data.end());
     }
 
+    // Will copy to buffer starting from data to specified end
+    void AddData(const char* data, const uint64_t start, const uint64_t end) {
+        size_t bufferSize = mBuffer.size();
+        mBuffer.resize(bufferSize + end);
+        std::memcpy(&mBuffer[bufferSize], &data + start, *data + end);
+    }
+
     [[nodiscard]] std::span<const char> GetData() {
         PacketHeader header{mType, mBuffer.size() + sizeof(PacketHeader)};
         auto data = std::span(reinterpret_cast<const char *>(&header), sizeof(PacketHeader));
