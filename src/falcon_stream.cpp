@@ -22,18 +22,24 @@ Stream::Stream(IStreamProvider *streamProvider, uuid128_t client, bool reliable)
     }
 }
 
-void Stream::SendData(std::span<const char> data) {
+void Stream::SendData(std::span<const char> data)
+{
 //    spdlog::debug("Sending data to stream {}, size: {}", ToString(mStreamID), data.size());
 
     // Vérifier la taille de la data qu'on veut envoyer
-    size_t packetFrags = std::ceil(static_cast<float>(data.size()) / static_cast<float>(MTU));
-    if (packetFrags > 1) {
-        for (size_t i = 0; i < packetFrags; ++i) {
-            // TODO : Soustraire au MTU la taille de DataHeader et DataSplitHeader
+    float adjustedMTU = static_cast<float>(MTU) - sizeof(DataSplitHeader) - sizeof(DataHeader);
+    size_t packetFrags = std::ceil(static_cast<float>(data.size()) / adjustedMTU);
+
+    if (packetFrags > 1)
+    {
+        for (size_t i = 0; i < packetFrags; ++i)
+        {
+            // Calcul de la taille de la data restante
             size_t offset = i * MTU;
             size_t length = std::min(static_cast<size_t>(MTU), data.size() - offset);
 
-            PacketBuilder packet(PacketType::DATA);
+            // On cree le packet
+            PacketBuilder packetBuilder(PacketType::DATA);
             DataHeader dataHeader{
                     mClientID,
                     mStreamID,
@@ -41,21 +47,24 @@ void Stream::SendData(std::span<const char> data) {
                     length,
                     1
             };
-            packet.AddStruct(dataHeader);
+            packetBuilder.AddStruct(dataHeader);
 
             DataSplitHeader dataSplitHeader{
                     static_cast<uint32_t>(i),
                     static_cast<uint32_t>(packetFrags)
             };
-            packet.AddStruct(dataSplitHeader);
+            packetBuilder.AddStruct(dataSplitHeader);
 
-            //Copier le paquet depuis offset jusqu'à length
-            packet.AddData(&data[offset], length);
+            // Copier le paquet depuis offset jusqu'à length
+            packetBuilder.AddData(&data[offset], length);
 
+            auto packet = packetBuilder.GetData();
             // Ajouter le packet a la liste d'attente
-            mAckWaitList.push_back(StreamPacket(mLocalSequence, packet.GetData()));
+            if (mReliability)
+                mAckWaitList.push_back(StreamPacket(mLocalSequence, packet));
 
-            ++mLocalSequence;
+            // Envoyer le packet (fragmenté)
+            mStreamProvider->SendStreamPacket(mClientID, packet);
         }
     } else {
         //Construction du packet
@@ -72,16 +81,17 @@ void Stream::SendData(std::span<const char> data) {
 
         auto packet = packetBuilder.GetData();
         // Rajouter le packet dans la liste d'attente
-        mAckWaitList.push_back(StreamPacket{mLocalSequence, packet});
+        if (mReliability)
+            mAckWaitList.push_back(StreamPacket{mLocalSequence, packet});
 
-        //Envoyer le packet
+        // Envoyer le packet
         mStreamProvider->SendStreamPacket(mClientID, packet);
-
-        ++mLocalSequence;
     }
+    ++mLocalSequence;
 }
 
-void Stream::SendMissingPackets(const std::vector<uint32_t> &ackedList) {
+void Stream::SendMissingPackets(const std::vector<uint32_t> &ackedList)
+{
 
 }
 
