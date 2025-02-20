@@ -5,6 +5,8 @@
 
 #include "spdlog/spdlog.h"
 
+std::string text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla quis vestibulum magna. In hac habitasse platea dictumst. Mauris vitae odio at libero tincidunt cursus. Mauris congue dolor in dapibus mattis. Proin egestas ultrices ultrices. Nullam sodales sapien nibh, eget malesuada erat iaculis et. Vestibulum id eros in risus condimentum dictum ac at elit. Orci varius natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Donec sollicitudin dictum ipsum ut iaculis. Nulla pulvinar, lectus cursus elementum malesuada, ligula augue consequat ante, et feugiat tellus nisi eu leo. Aenean in nisi ex. Nam rutrum, eros dapibus tristique lobortis, nisi lorem egestas lorem, nec mattis risus enim a ipsum. Vivamus eget sodales lorem. Pellentesque aliquam aliquet lacus, quis tristique quam varius nec. Vivamus scelerisque vestibulum lorem id vulputate. Donec vel nibh turpis. Cras luctus vestibulum libero, eu dictum purus eleifend et. Ut aliquet rutrum lorem vel auctor. Cras varius eget mauris at dictum. Mauris at faucibus nulla, eget faucibus arcu. Donec mi lectus, tempor quis egestas eget, gravida quis turpis. Pellentesque non tellus vestibulum, pulvinar libero sit amet, tincidunt felis. Maecenas eu scelerisque nisl. Aenean eleifend tortor eget aliquet molestie. Vivamus eleifend enim sit amet fermentum fermentum.Morbi tellus mauris, venenatis vel elit ac, scelerisque vulputate erat. Lorem ipsum dolor sit amet, consectetur adipiscing elit. In tempus, risus luctus massa nunc.";
+
 int main() {
     spdlog::set_level(spdlog::level::debug);
     spdlog::debug("Hello World!");
@@ -51,7 +53,7 @@ int main() {
             spdlog::info("Sending data to {} streams", streams.size());
 
             for (auto &stream: streams) {
-                stream->SendData("J'envoie un message au stream " + ToString(stream->GetStreamID()));
+                stream->SendData(text, text.size());
             }
         }
     }

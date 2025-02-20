@@ -113,11 +113,11 @@ std::unique_ptr<Falcon> Falcon::Connect(const std::string& serverIp, uint16_t po
     falcon->m_socket = socket(local_endpoint.sa_family,
         SOCK_DGRAM,
         IPPROTO_UDP);
-//    if (int error = bind(falcon->m_socket, &local_endpoint, sizeof(local_endpoint)); error != 0)
-//    {
-//        closesocket(falcon->m_socket);
-//        return nullptr;
-//    }
+    // if (int error = bind(falcon->m_socket, &local_endpoint, sizeof(local_endpoint)); error != 0)
+    // {
+    //     closesocket(falcon->m_socket);
+    //     return nullptr;
+    // }
 
     return falcon;
 }

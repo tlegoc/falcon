@@ -11,8 +11,8 @@
 #include <falcon.h>
 #include <array>
 #include <chrono>
-#include <unordered_set>
 #include <unordered_map>
+#include <bitset>
 
 #include <uuid.h>
 
@@ -89,7 +89,7 @@ struct DataAckHeader {
     uuid128_t uuid;
     uuid128_t streamId;
     uint32_t lastMsgId;
-    std::array<uint8_t, 128> bitField; // should allow to validate 128 * 8 = 1024 messages
+    std::bitset<1024> bitField; // should allow to validate 128 * 8 = 1024 messages
 };
 
 class PacketBuilder {
@@ -174,14 +174,15 @@ public:
 
     struct StreamPacket {
         uint32_t id;
+        size_t size;
         std::span<const char> data;
     };
 
     struct FragmentedPacket
     {
         uint32_t total;
-        std::vector<uint32_t> ids;
-        std::vector<std::span<const char>> data;
+        size_t size;
+        std::unordered_map<uint32_t, std::span<const char>> fragment;
     };
 
     explicit Stream(IStreamProvider *streamProvider, uuid128_t client, bool reliable);
@@ -196,26 +197,32 @@ public:
 
     Stream operator=(Stream &&) noexcept = delete;
 
-    void SendData(std::span<const char> data);
+    void SendData(std::span<const char> data, size_t size);
 
     void OnDataReceived(std::function<void(std::span<const char>)> function);
 
     void SendMissingPackets(const std::vector<uint32_t>& ackedList);
 
-    void HandlePartialPacket(uint32_t packetId, DataSplitHeader header, std::span<const char> packetData);
+    void HandlePartialPacket(uint32_t packetId, DataSplitHeader header, std::span<const char> packetData, size_t size);
 
-    void HandleDataReceived(std::span<const char> data);
+    void HandleDataReceived(std::span<const char> data, size_t size);
 
     static inline bool SequenceGreaterThan(uint16_t s1, uint16_t s2) {
         return ((s1 > s2) && (s1 - s2 <= 32768)) ||
                ((s1 < s2) && (s2 - s1 > 32768));
     }
 
-    uint32_t GetLocalSequence() const { return mLocalSequence; };
+    uint32_t GetLocalSequence() const { return mLocalSequence; }
 
-    uint32_t GetRemoteSequence() const { return mRemoteSequence; };
+    uint32_t GetRemoteSequence() const { return mRemoteSequence; }
 
-    uuid128_t GetStreamID() const { return mStreamID; };
+    uuid128_t GetStreamID() const { return mStreamID; }
+
+    void SetStreamID(uuid128_t id) { mStreamID = id;}
+
+    static std::vector<uint32_t> GetReceivedMessagesFromBitfield(uint32_t lastMsg, std::bitset<1024> bitfield);
+
+    static std::bitset<1024> GetBitFieldFromLastReceived(uint32_t lastMsg, std::vector<uint32_t> received);
 
 private :
     IStreamProvider *mStreamProvider;
@@ -279,6 +286,8 @@ private:
 
     void HandleDataPacket(const std::string &ip, uint16_t port, PacketReader &reader);
 
+    void HandleDataAckPacket(const std::string &ip, uint16_t port, PacketReader &reader);
+
     bool IsEndpointValidForClient(const std::string &ip, uint16_t port, uuid128_t client);
 
     void CheckClientTimeout();
@@ -324,6 +333,8 @@ private:
     void HandlePingPacket(const std::string &ip, uint16_t port, PacketReader &reader);
 
     void HandleDataPacket(const std::string &ip, uint16_t port, PacketReader &reader);
+
+    void HandleDataAckPacket(const std::string &ip, uint16_t port, PacketReader &reader);
 
     bool IsEndpointServer(const std::string &ip, uint16_t port);
 
