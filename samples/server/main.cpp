@@ -53,7 +53,7 @@ int main() {
             spdlog::info("Sending data to {} streams", streams.size());
 
             for (auto &stream: streams) {
-                stream->SendData(text, text.size());
+                stream->SendData(text);
             }
         }
     }

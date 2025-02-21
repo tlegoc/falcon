@@ -44,7 +44,7 @@ int main() {
     client.OnStreamCreated([&](std::shared_ptr<Stream> s) {
         stream = s;
         s->OnDataReceived([](std::span<const char> data) {
-            spdlog::info(data.data());
+            spdlog::info("Received {} bytes : {}", data.size(), data.data());
         });
     });
 

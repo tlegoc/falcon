@@ -181,8 +181,8 @@ public:
     struct FragmentedPacket
     {
         uint32_t total;
-        size_t size;
-        std::unordered_map<uint32_t, std::span<const char>> fragment;
+        std::vector<size_t> sizes;
+        std::unordered_map<uint32_t, std::vector<char>> fragment;
     };
 
     explicit Stream(IStreamProvider *streamProvider, uuid128_t client, bool reliable);
@@ -197,7 +197,7 @@ public:
 
     Stream operator=(Stream &&) noexcept = delete;
 
-    void SendData(std::span<const char> data, size_t size);
+    void SendData(std::span<const char> data);
 
     void OnDataReceived(std::function<void(std::span<const char>)> function);
 

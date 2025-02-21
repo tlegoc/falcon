@@ -22,13 +22,13 @@ Stream::Stream(IStreamProvider *streamProvider, uuid128_t client, bool reliable)
     }
 }
 
-void Stream::SendData(std::span<const char> data, size_t size)
+void Stream::SendData(std::span<const char> data)
 {
 //    spdlog::debug("Sending data to stream {}, size: {}", ToString(mStreamID), data.size());
 
     // Vérifier la taille de la data qu'on veut envoyer
     float adjustedMTU = static_cast<float>(MTU) - sizeof(DataSplitHeader) - sizeof(DataHeader);
-    size_t packetFrags = std::ceil(static_cast<float>(size) / adjustedMTU);
+    size_t packetFrags = std::ceil(static_cast<float>(data.size()) / adjustedMTU);
 
     if (packetFrags > 1)
     {
@@ -36,7 +36,7 @@ void Stream::SendData(std::span<const char> data, size_t size)
         {
             // Calcul de la taille de la data restante
             size_t offset = i * MTU;
-            size_t length = std::min(static_cast<size_t>(MTU), size - offset);
+            size_t length = std::min(static_cast<size_t>(adjustedMTU), data.size() - offset);
 
             // On cree le packet
             PacketBuilder packetBuilder(PacketType::DATA);
@@ -61,7 +61,7 @@ void Stream::SendData(std::span<const char> data, size_t size)
             auto packet = packetBuilder.GetData();
             // Ajouter le packet a la liste d'attente
             if (mReliability)
-                mAckWaitList.push_back(StreamPacket(mLocalSequence, size, packet));
+                mAckWaitList.push_back(StreamPacket(mLocalSequence, packet.size(), packet));
 
             // Envoyer le packet (fragmenté)
             mStreamProvider->SendStreamPacket(mClientID, packet);
@@ -86,6 +86,7 @@ void Stream::SendData(std::span<const char> data, size_t size)
 
         // Envoyer le packet
         mStreamProvider->SendStreamPacket(mClientID, packet);
+
     }
     ++mLocalSequence;
 }
@@ -103,7 +104,7 @@ void Stream::SendMissingPackets(const std::vector<uint32_t> &ackedList)
 
     for (auto& packet : mAckWaitList)
     {
-        SendData(packet.data, packet.size);
+        SendData(packet.data);
     }
 }
 
@@ -111,8 +112,9 @@ void Stream::HandlePartialPacket(uint32_t packetId, DataSplitHeader header, std:
 {
     spdlog::debug("Received partial packet.");
     mReceivedFragmentPacket[packetId].total = header.total;
-    mReceivedFragmentPacket[packetId].size = size;
-    mReceivedFragmentPacket[packetId].fragment[header.partId] = packetData;
+    mReceivedFragmentPacket[packetId].sizes.push_back(size);
+    mReceivedFragmentPacket[packetId].fragment[header.partId].resize(size);
+    mReceivedFragmentPacket[packetId].fragment[header.partId].insert(mReceivedFragmentPacket[packetId].fragment[header.partId].begin(), packetData.begin(), packetData.begin() + size);
 
     // Verifier si on a le total
     if (header.total != mReceivedFragmentPacket[packetId].fragment.size())
@@ -123,8 +125,8 @@ void Stream::HandlePartialPacket(uint32_t packetId, DataSplitHeader header, std:
     for (size_t i = 0; i < header.total; ++i)
     {
         size_t arraySize = reconstructedPacket.size();
-        reconstructedPacket.resize(arraySize + mReceivedFragmentPacket[packetId].size);
-        std::memcpy(&reconstructedPacket[arraySize], &mReceivedFragmentPacket[packetId].fragment[i], mReceivedFragmentPacket[packetId].size);
+        reconstructedPacket.resize(arraySize + mReceivedFragmentPacket[packetId].sizes[i]);
+        std::memcpy(&reconstructedPacket[arraySize], mReceivedFragmentPacket[packetId].fragment[i].data(), mReceivedFragmentPacket[packetId].sizes[i]);
     }
 
     // Packet reconstruit, on peut le traiter comme un packet reçu
