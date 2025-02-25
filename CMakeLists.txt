@@ -21,7 +21,7 @@ target_link_libraries(falcon PUBLIC spdlog::spdlog_header_only fmt::fmt-header-o
 
 if (NOT WIN32)
     find_package(libuuid REQUIRED)
-    target_link_libraries(falcon PUBLIC uuid::uuid)
+    target_link_libraries(falcon PUBLIC uuid)
 endif ()
 
 add_subdirectory(externals)

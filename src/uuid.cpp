@@ -45,7 +45,7 @@ bool operator!=(const uuid128_t& left, const uuid128_t& right)
 
 uuid128_t UuidGenerator::Generate()
 {
-    std::array<uint8_t,16> uuid {};
+    uuid128_t uuid {};
 
 #ifdef _WIN32
     GUID id;
