@@ -28,7 +28,7 @@ void Stream::SendData(std::span<const char> data) {
 //    spdlog::debug("Sending data to stream {}, size: {}", ToString(mStreamID), data.size());
 
     // Vérifier la taille de la data qu'on veut envoyer
-    float adjustedMTU = static_cast<float>(MTU) - sizeof(DataSplitHeader) - sizeof(DataHeader);
+    float adjustedMTU = static_cast<float>(MTU) - sizeof(DataSplitHeader) - sizeof(DataHeader) - sizeof(PacketHeader);
     size_t packetFrags = std::ceil(static_cast<float>(data.size()) / adjustedMTU);
 
     if (packetFrags > 1) {
@@ -36,7 +36,7 @@ void Stream::SendData(std::span<const char> data) {
 
         for (size_t i = 0; i < packetFrags; ++i) {
             // Calcul de la taille de la data restante
-            size_t offset = i * MTU;
+            size_t offset = i * adjustedMTU;
             size_t length = std::min(static_cast<size_t>(adjustedMTU), data.size() - offset);
 
             // On cree le packet
