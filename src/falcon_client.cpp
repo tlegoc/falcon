@@ -9,11 +9,9 @@
 
 #include <spdlog/spdlog.h>
 
-void FalconClient::ConnectTo(const std::string& endpoint, uint16_t port)
-{
+void FalconClient::ConnectTo(const std::string &endpoint, uint16_t port) {
     mFalcon = Falcon::Connect(endpoint, port);
-    if (!mFalcon)
-    {
+    if (!mFalcon) {
         spdlog::error("Failed to connect to server");
         if (mConnectionHandler) mConnectionHandler(false, {});
         return;
@@ -36,8 +34,7 @@ void FalconClient::ConnectTo(const std::string& endpoint, uint16_t port)
     bool timeout;
     PROTOCOL_TIMEOUT_HELPER(mFalcon, from, buffer, timeout);
 
-    if (timeout)
-    {
+    if (timeout) {
         spdlog::error("Connection timeout");
 
         mFalcon = nullptr;
@@ -59,8 +56,7 @@ void FalconClient::ConnectTo(const std::string& endpoint, uint16_t port)
     PacketHeader receivedHeader{};
     reader.ReadHeader(receivedHeader);
 
-    if (receivedHeader.type != PacketType::CONNECT_ACK)
-    {
+    if (receivedHeader.type != PacketType::CONNECT_ACK) {
         spdlog::error("Expected CONNECT_ACK, got {}", receivedHeader.type);
 
         mFalcon = nullptr;
@@ -84,19 +80,16 @@ void FalconClient::ConnectTo(const std::string& endpoint, uint16_t port)
     mLastReceivedMessage = Clock::now();
 }
 
-void FalconClient::OnConnection(std::function<void(bool, uuid128_t)> handler)
-{
+void FalconClient::OnConnection(std::function<void(bool, uuid128_t)> handler) {
     mConnectionHandler = std::move(handler);
 }
 
-void FalconClient::OnDisconnect(std::function<void()> handler)
-{
+void FalconClient::OnDisconnect(std::function<void()> handler) {
     mDisconnectHandler = std::move(handler);
 }
 
-std::shared_ptr<Stream> FalconClient::CreateStream(bool reliable)
-{
-    auto stream = std::make_shared<Stream>(static_cast<IStreamProvider*>(this), mUuid, reliable);
+std::shared_ptr<Stream> FalconClient::CreateStream(bool reliable) {
+    auto stream = std::make_shared<Stream>(static_cast<IStreamProvider *>(this), mUuid, reliable);
 
     mStreams[stream->GetStreamID()] = stream;
 
@@ -105,31 +98,31 @@ std::shared_ptr<Stream> FalconClient::CreateStream(bool reliable)
     return stream;
 }
 
-void FalconClient::OnStreamCreated(std::function<void(std::shared_ptr<Stream>)> handler)
-{
+void FalconClient::OnStreamCreated(std::function<void(std::shared_ptr<Stream>)> handler) {
     mStreamCreatedHandler = std::move(handler);
 }
 
-void FalconClient::SendStreamPacket(uuid128_t clientId, std::span<const char> data)
-{
+void FalconClient::SendStreamPacket(uuid128_t clientId, std::span<const char> data) {
     mFalcon->SendTo(mServerIp, mServerPort, data);
 }
 
-void FalconClient::Tick()
-{
+void FalconClient::Tick() {
     if (!mFalcon) return;
 
     // Listen to messages
-    std::array<char, 65535> buffer{};
+
+    std::array<char, 65535> array{};
+    std::span<const char> buffer;
     std::string from;
-    if (mFalcon->ReceiveFrom(from, buffer) > 0)
-    {
+    int64_t size = mFalcon->ReceiveFrom(from, array);
+    if (size > 0) {
+        buffer = {array.data(), static_cast<size_t>(size)};
+
         std::string fromIp;
         uint16_t fromPort;
         Falcon::SplitIpString(from, fromIp, fromPort);
 
-        if (!IsEndpointServer(fromIp, fromPort))
-        {
+        if (!IsEndpointServer(fromIp, fromPort)) {
             spdlog::error("Received message from unknown source: {}:{}", fromIp, fromPort);
             return;
         }
@@ -139,74 +132,64 @@ void FalconClient::Tick()
         PacketHeader packetHeader{};
         reader.ReadHeader(packetHeader);
 
-        switch (packetHeader.type)
-        {
-        default:
-            spdlog::info("Unknown packet type: {}", packetHeader.type);
-            break;
-        case PacketType::PING:
-            {
+        switch (packetHeader.type) {
+            default:
+                spdlog::info("Unknown packet type: {}", packetHeader.type);
+                break;
+            case PacketType::PING: {
                 HandlePingPacket(fromIp, fromPort, reader);
                 break;
             }
-        case PacketType::DATA:
-            {
+            case PacketType::DATA: {
                 HandleDataPacket(fromIp, fromPort, reader);
                 break;
             }
-        case PacketType::DATA_ACK:
-            {
+            case PacketType::DATA_ACK: {
                 HandleDataAckPacket(fromIp, fromPort, reader);
                 break;
             }
-        case PacketType::CONNECT:
-        case PacketType::CONNECT_ACK:
-        case PacketType::RECONNECT:
-            spdlog::info("Unsupported packet type: {}", packetHeader.type);
-            break;
+            case PacketType::CONNECT:
+            case PacketType::CONNECT_ACK:
+            case PacketType::RECONNECT:
+                spdlog::info("Unsupported packet type: {}", packetHeader.type);
+                break;
         }
 
         mLastReceivedMessage = Clock::now();
     }
 
     // Send ping if necessary
-    if (std::chrono::high_resolution_clock::now() - mLastSentPing > mPingInterval)
-    {
+    if (std::chrono::high_resolution_clock::now() - mLastSentPing > mPingInterval) {
         SendPingToServer();
     }
 
     // DEBUG Show rtt every second
 // #ifdef _DEBUG
     static TimePoint lastPrintedRTT = Clock::now();
-    if (Clock::now() - lastPrintedRTT > std::chrono::seconds(1))
-    {
+    if (Clock::now() - lastPrintedRTT > std::chrono::seconds(1)) {
         spdlog::debug("RTT: {}ms", std::chrono::duration_cast<std::chrono::milliseconds>(mRTT).count());
         lastPrintedRTT = Clock::now();
     }
 // #endif
 
     // If the last received message was too long ago, then the server disconnected
-    if (Clock::now() - mLastReceivedMessage > std::chrono::milliseconds(PROTOCOL_DISCONNECT_MILLISECONDS))
-    {
+    if (Clock::now() - mLastReceivedMessage > std::chrono::milliseconds(PROTOCOL_DISCONNECT_MILLISECONDS)) {
         spdlog::error("Connection timeout");
         if (mDisconnectHandler) mDisconnectHandler();
         mFalcon = nullptr;
     }
 }
 
-void FalconClient::HandlePingPacket(const std::string& ip, uint16_t port, PacketReader& reader)
-{
+void FalconClient::HandlePingPacket(const std::string &ip, uint16_t port, PacketReader &reader) {
     PingHeader pingPacket{};
     reader.ReadHeader(pingPacket);
 
-    if (pingPacket.uuid != mUuid)
-    {
+    if (pingPacket.uuid != mUuid) {
         spdlog::error("Received ping is not using our uuid");
         return;
     }
 
-    if (pingPacket.id >= mCurrentPingId)
-    {
+    if (pingPacket.id >= mCurrentPingId) {
         spdlog::error("Received ping with invalid id");
         return;
     }
@@ -216,13 +199,11 @@ void FalconClient::HandlePingPacket(const std::string& ip, uint16_t port, Packet
     mRTT = mLastReceivedPing - TimePoint(Duration(pingPacket.time));
 }
 
-void FalconClient::HandleDataPacket(const std::string& ip, uint16_t port, PacketReader& reader)
-{
+void FalconClient::HandleDataPacket(const std::string &ip, uint16_t port, PacketReader &reader) {
     DataHeader dataHeader{};
     reader.ReadHeader(dataHeader);
 
-    if (dataHeader.uuid != mUuid)
-    {
+    if (dataHeader.uuid != mUuid) {
         spdlog::error("Received data ack is not using our uuid");
         return;
     }
@@ -231,13 +212,10 @@ void FalconClient::HandleDataPacket(const std::string& ip, uint16_t port, Packet
 
     // Retrieve or create stream if necessary
     std::shared_ptr<Stream> stream = nullptr;
-    if (mStreams.contains(dataHeader.streamId))
-    {
+    if (mStreams.contains(dataHeader.streamId)) {
         stream = mStreams[dataHeader.streamId];
-    }
-    else
-    {
-        stream = std::make_shared<Stream>(static_cast<IStreamProvider*>(this), mUuid, reliable);
+    } else {
+        stream = std::make_shared<Stream>(static_cast<IStreamProvider *>(this), mUuid, reliable);
         stream->SetStreamID(dataHeader.streamId);
         mStreams[dataHeader.streamId] = stream;
 
@@ -245,44 +223,46 @@ void FalconClient::HandleDataPacket(const std::string& ip, uint16_t port, Packet
     }
 
     auto fragmented = (dataHeader.flags & DataFlag::FRAGMENTED) == DataFlag::FRAGMENTED;
-    if (fragmented)
-    {
+    if (fragmented) {
         DataSplitHeader splitHeader{};
         reader.ReadHeader(splitHeader);
 
-        stream->HandlePartialPacket(dataHeader.msgId, splitHeader, reader.GetRemainingData(), dataHeader.size);
-    }
-    else
-    {
-        stream->HandleDataReceived(reader.GetRemainingData(), dataHeader.size);
+        if (stream->HandleAck(dataHeader.msgId)) {
+            stream->HandlePartialPacket(splitHeader, reader.GetRemainingData(), dataHeader.size);
+        }
+    } else {
+        if (stream->HandleAck(dataHeader.msgId)) {
+            stream->HandleDataReceived(reader.GetRemainingData());
+        }
     }
 }
 
-void FalconClient::HandleDataAckPacket(const std::string& ip, uint16_t port, PacketReader& reader)
-{
+void FalconClient::HandleDataAckPacket(const std::string &ip, uint16_t port, PacketReader &reader) {
+    spdlog::debug("Received ack.");
     DataAckHeader dataAckHeader{};
     reader.ReadHeader(dataAckHeader);
 
-    if (dataAckHeader.uuid != mUuid)
-    {
+    if (dataAckHeader.uuid != mUuid) {
         spdlog::error("Received data ack is not using our uuid");
         return;
     }
 
-    auto stream = mStreams[dataAckHeader.streamId];
+    if (mStreams.contains(dataAckHeader.streamId)) {
+        auto stream = mStreams[dataAckHeader.streamId];
 
-    auto receivedMessages = Stream::GetReceivedMessagesFromBitfield(dataAckHeader.lastMsgId, dataAckHeader.bitField);
+        auto receivedMessages = Stream::GetReceivedMessagesFromBitfield(dataAckHeader.lastMsgId,
+                                                                        Stream::ConstCharToBitSet(
+                                                                                dataAckHeader.bitField));
 
-    stream->SendMissingPackets(receivedMessages);
+        stream->HandleMissingPackets(receivedMessages);
+    }
 }
 
-bool FalconClient::IsEndpointServer(const std::string& ip, uint16_t port)
-{
+bool FalconClient::IsEndpointServer(const std::string &ip, uint16_t port) {
     return ip == mServerIp && port == mServerPort;
 }
 
-void FalconClient::SendPingToServer()
-{
+void FalconClient::SendPingToServer() {
     mLastSentPing = Clock::now();
 
     PacketBuilder builder(PacketType::PING);
