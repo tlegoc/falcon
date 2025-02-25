@@ -6,6 +6,7 @@
 #include <memory>
 #include <fmt/core.h>
 #include "falcon.h"
+#include <fcntl.h>
 
 std::string IpToString(const sockaddr* sa)
 {
@@ -104,9 +105,22 @@ std::unique_ptr<Falcon> Falcon::Connect(const std::string& serverIp, uint16_t po
 
 int Falcon::SetBlocking(bool shouldBlock)
 {
-    int block = shouldBlock ? 0 : 1;
-    int error = ioctl(m_socket, FIONBIO, &block);
-    return error;
+    int flags = fcntl(m_socket, F_GETFL, 0);
+    if (flags == -1)
+    {
+        return -1;
+    }
+
+    if (shouldBlock)
+    {
+        flags &= ~O_NONBLOCK;
+    }
+    else
+    {
+        flags |= O_NONBLOCK;
+    }
+
+    return fcntl(m_socket, F_SETFL, flags);
 }
 
 int Falcon::SendToInternal(const std::string &to, uint16_t port, std::span<const char> message)

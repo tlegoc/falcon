@@ -13,6 +13,7 @@
 #include <chrono>
 #include <unordered_map>
 #include <bitset>
+#include <cstring>
 
 #include <uuid.h>
 
